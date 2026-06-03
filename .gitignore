@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+key.txt
+venv/
+.venv/
+*.conda/
+
+# IDE
+.idea/
+.vscode/
+
+# Memory store（运行期数据，非源码）
+memory_store/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Unrelated
+Agent模型生成代码/
+img.jpg
+
+# Git
+*.orig
