@@ -11,7 +11,7 @@ LangGraph Agent 工作流
   - 记忆能力：自动存储/加载历史对话，实现跨会话记忆
   - 文件参考：支持读取文件内容供 AI 分析参考
 
-流程：START → analyze_node → expert_process_node → expert_correction_node → END
+流程：START → web_search_node → analyze_node → expert_process_node → expert_correction_node → END
 """
 
 from datetime import datetime
@@ -20,6 +20,7 @@ from langgraph.graph import StateGraph, START, END
 
 from models import call_qwen, call_deepseek
 from memory import get_memory
+from web_search import search_web
 
 
 # ============================================================
@@ -53,6 +54,11 @@ class AgentState(TypedDict):
     current_time: Optional[str]           # 当前时间（注入用）
     memory_context: Optional[str]         # 历史记忆上下文
     file_context: Optional[str]           # 参考文件内容
+
+    # ---- 联网搜索字段 ----
+    web_search_enabled: Optional[bool]    # 是否启用联网搜索
+    web_search_results: Optional[str]     # 联网搜索结果
+    web_search_performed: Optional[bool]  # 是否执行了搜索
 
 
 # ============================================================
@@ -109,6 +115,7 @@ def _build_analysis_prompt(state: AgentState) -> tuple[str, str]:
     current_time = state.get("current_time") or _now_str()
     memory_context = state.get("memory_context", "")
     file_context = state.get("file_context", "")
+    web_results = state.get("web_search_results", "")
 
     # 时间信息
     time_info = f"⏰ 当前时间：{current_time}"
@@ -117,13 +124,43 @@ def _build_analysis_prompt(state: AgentState) -> tuple[str, str]:
     enhanced_system = ANALYST_PROMPT
     if memory_context:
         enhanced_system += f"\n\n{memory_context}"
+    if web_results:
+        enhanced_system += (
+            "\n\n注意：以下是从互联网检索到的实时信息，请优先参考其中的"
+            "事实和数据来回答用户问题。如果搜索结果不足以回答问题，"
+            "请基于你的知识进行补充。"
+        )
 
     # 用户消息
     user_msg = f"{time_info}\n\n请分析以下交谈内容：\n\n{conversation}"
     if file_context:
         user_msg += f"\n\n{file_context}"
+    if web_results:
+        user_msg += f"\n\n【🌐 联网搜索结果】\n{web_results}"
 
     return enhanced_system, user_msg
+
+
+def web_search_node(state: AgentState) -> dict:
+    """
+    联网搜索节点（插入在 START 与 analyze 之间）。
+    当联网开关打开时，始终用用户问题作为搜索词检索互联网，
+    结果注入到分析上下文中供 AI 参考。
+    """
+    conversation = state.get("conversation", "")
+    if not state.get("web_search_enabled", True):
+        return {"web_search_results": "", "web_search_performed": False}
+
+    if not conversation.strip():
+        return {"web_search_results": "", "web_search_performed": False}
+
+    # ---- 始终搜索：直接用用户输入提取搜索词 ----
+    # 截取有效搜索词（取前 100 字，去掉过长内容）
+    search_query = conversation.strip()[:100]
+
+    results = search_web(search_query, max_results=5)
+    performed = not results.startswith("[联网搜索出错]") and "未找到" not in results
+    return {"web_search_results": results, "web_search_performed": performed}
 
 
 def analyze_node(state: AgentState) -> dict:
@@ -244,19 +281,22 @@ def expert_correction_node(state: AgentState) -> dict:
 
 def build_agent_graph() -> StateGraph:
     """
-    构建三阶段顺序执行的 Agent 图：
-      START → analyze_node → expert_process_node → expert_correction_node → END
+    构建四阶段顺序执行的 Agent 图：
+      START → web_search_node → analyze_node → expert_process_node → expert_correction_node → END
     """
     builder = StateGraph(AgentState)
 
     # 添加节点
+    builder.add_node("web_search", web_search_node)
     builder.add_node("analyze", analyze_node)
     builder.add_node("expert_process", expert_process_node)
     builder.add_node("expert_correction", expert_correction_node)
 
     # 边的逻辑：
-    # START → analyze
-    builder.add_edge(START, "analyze")
+    # START → web_search
+    builder.add_edge(START, "web_search")
+    # web_search → analyze
+    builder.add_edge("web_search", "analyze")
     # analyze → expert_process
     builder.add_edge("analyze", "expert_process")
     # expert_process → expert_correction
@@ -275,6 +315,7 @@ def run_agent(
     conversation: str,
     files_content: str = "",
     use_memory: bool = True,
+    use_web_search: bool = True,
 ) -> AgentState:
     """
     运行整个 Agent 工作流
@@ -314,6 +355,10 @@ def run_agent(
         "current_time": current_time,
         "memory_context": memory_context,
         "file_context": file_section,
+        # 联网搜索字段
+        "web_search_enabled": use_web_search,
+        "web_search_results": None,
+        "web_search_performed": False,
     }
 
     # ---- 执行 ----

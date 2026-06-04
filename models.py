@@ -10,21 +10,6 @@ API Key 通过环境变量传入，不硬编码在代码中。
 import os
 from openai import OpenAI
 
-
-# ============================================================
-# 从 key.txt 加载 API Key（如果文件存在且环境变量未设置）
-# ============================================================
-_key_file = os.path.join(os.path.dirname(__file__), "key.txt")
-if os.path.exists(_key_file):
-    with open(_key_file, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if "=" in line and not line.startswith("#") and not line.startswith("ERror"):
-                key, value = line.split("=", 1)
-                # 只有环境变量中没设时才从文件读取
-                if key.strip() not in os.environ:
-                    os.environ[key.strip()] = value.strip()
-
 # ============================================================
 # API Key（从环境变量读取）
 # ============================================================
